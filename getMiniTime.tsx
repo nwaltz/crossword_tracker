@@ -24,10 +24,11 @@ type Player = {
 };
 
 const BASE_URL = 'https://www.nytimes.com/svc/crosswords/v6/puzzle/mini';  // Replace with your base URL
-const PUZZLE_URL = 'https://www.nytimes.com/svc/crosswords/v6/game'
 
 async function fetchPlayerTime(id: string, cookie: string): Promise<any> {
-  const url = `${PUZZLE_URL}/${id}.json`;
+  const puzzle_url = 'https://www.nytimes.com/svc/crosswords/v6/game'
+
+  const url = `${puzzle_url}/${id}.json`;
   console.log('Fetching from URL:', url);
 
   try {
@@ -64,10 +65,10 @@ async function fetchPlayerTime(id: string, cookie: string): Promise<any> {
   }
 }
 
-export async function fetchCurrentPuzzleInfo(date: Date = new Date(), cookie: string): Promise<any> {
+export async function fetchCurrentPuzzleInfo(date: Date = new Date(), cookie: string, puzzleType: string): Promise<any> {
   try {
     const formattedDate = date.toISOString().split('T')[0];
-    const url = `${BASE_URL}/${formattedDate}.json`;
+    const url = `https://www.nytimes.com/svc/crosswords/v6/puzzle/${puzzleType}/${formattedDate}.json`;
     console.log('Fetching from URL:', url);
     
     const response = await fetch(url, {

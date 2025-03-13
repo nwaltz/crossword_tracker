@@ -5,7 +5,7 @@
  * @format
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import type {PropsWithChildren} from 'react';
 import {
   ScrollView,
@@ -17,6 +17,8 @@ import {
   ActivityIndicator,
   Alert,
   TouchableOpacity,
+  Platform,
+  NativeModules,
 } from 'react-native';
 import { useSafeAreaInsets, SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -44,8 +46,8 @@ interface AppProps {
 }
 
 // Helper functions
-function formatTime(seconds: number): string {
-  if (!seconds) return '00:00';
+function formatTime(seconds: number | null | undefined): string {
+  if (!seconds) return '--:--';
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.floor(seconds % 60);
   return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
@@ -54,6 +56,15 @@ function formatTime(seconds: number): string {
 function getDateFromString(dateStr: string): Date {
   const [year, month, day] = dateStr.split('-').map(Number);
   return new Date(year, month - 1, day); // month is 0-indexed in JS Date
+}
+
+function formatDate(date: Date): string {
+  return date.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
 }
 
 interface LeaderboardType {
@@ -76,12 +87,19 @@ const leaderboardTypes: LeaderboardType[] = [
           const isValid = await validateCookie(cookieData.cookie);
           if (!isValid) continue;
 
-          const data = await fetchCurrentPuzzleInfo(date, cookieData.cookie);
+          const data = await fetchCurrentPuzzleInfo(date, cookieData.cookie, 'mini');
           if (data) {
             playerTimes.push({
               id: index + 1,
               name: cookieData.userId,
               score: data || 0
+            });
+          }
+          else {
+            playerTimes.push({
+              id: index + 1,
+              name: cookieData.userId,
+              score: 0
             });
           }
         } catch (err) {
@@ -98,11 +116,41 @@ const leaderboardTypes: LeaderboardType[] = [
     id: 'daily',
     name: 'Daily',
     fetchData: async (date: Date) => {
-      // Placeholder for daily puzzle leaderboard
-      return [];
+      const allCookies = getAllCookies();
+      const playerTimes: Player[] = [];
+
+      for (const [index, cookieData] of allCookies.entries()) {
+        try {
+          const isValid = await validateCookie(cookieData.cookie);
+          if (!isValid) continue;
+
+          const data = await fetchCurrentPuzzleInfo(date, cookieData.cookie, 'daily');
+          if (data) {
+            playerTimes.push({
+              id: index + 1,
+              name: cookieData.userId,
+              score: data || 0
+            });
+          }
+          else {
+            playerTimes.push({
+              id: index + 1,
+              name: cookieData.userId,
+              score: 0
+            });
+          }
+        } catch (err) {
+          console.log(`Error fetching data for ${cookieData.userId}:`, err);
+        }
+      }
+
+      // Sort by score (ascending - faster times first)
+      return playerTimes.sort((a, b) => a.score - b.score);
     }
   }
 ];
+
+const { WidgetManager } = NativeModules;
 
 function LeaderboardMenu({ 
   selectedType, 
@@ -114,26 +162,50 @@ function LeaderboardMenu({
   isDarkMode: boolean 
 }) {
   const backgroundColor = isDarkMode ? Colors.darker : Colors.lighter;
+  const borderColor = isDarkMode ? '#555555' : '#e0e0e0';
+  const textColor = isDarkMode ? '#ffffff' : '#000000';
+  const [showLeftFade, setShowLeftFade] = useState(false);
+  const [showRightFade, setShowRightFade] = useState(true);
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  const handleScroll = (event: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const isAtStart = contentOffset.x <= 0;
+    const isAtEnd = contentOffset.x + layoutMeasurement.width >= contentSize.width;
+    
+    setShowLeftFade(!isAtStart);
+    setShowRightFade(!isAtEnd);
+  };
   
   return (
-    <View style={[styles.menuContainer, { backgroundColor }]}>
+    <View style={[styles.menuOuterContainer, { backgroundColor, borderColor }]}>
+      {showLeftFade && (
+        <View style={[styles.fadeView, styles.leftFade, { backgroundColor }]} pointerEvents="none" />
+      )}
       <ScrollView 
+        ref={scrollViewRef}
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.menuScrollContent}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
       >
         {leaderboardTypes.map((type) => (
           <TouchableOpacity
             key={type.id}
             style={[
               styles.menuItem,
-              { backgroundColor },
+              { 
+                backgroundColor,
+                borderColor: selectedType === type.id ? (isDarkMode ? '#ffffff' : '#000000') : borderColor
+              },
               selectedType === type.id && styles.menuItemSelected
             ]}
             onPress={() => onSelect(type.id)}
           >
             <Text style={[
               styles.menuText,
+              { color: textColor },
               selectedType === type.id && styles.menuTextSelected
             ]}>
               {type.name}
@@ -141,6 +213,9 @@ function LeaderboardMenu({
           </TouchableOpacity>
         ))}
       </ScrollView>
+      {showRightFade && (
+        <View style={[styles.fadeView, styles.rightFade, { backgroundColor }]} pointerEvents="none" />
+      )}
     </View>
   );
 }
@@ -157,6 +232,9 @@ function Leaderboard({
   const [players, setPlayers] = useState<Player[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const borderColor = isDarkMode ? '#555555' : '#cccccc';
+  const textColor = isDarkMode ? '#ffffff' : '#000000';
+  const secondaryTextColor = isDarkMode ? '#cccccc' : '#666666';
 
   useEffect(() => {
     async function loadLeaderboard() {
@@ -195,9 +273,9 @@ function Leaderboard({
         <ActivityIndicator size="large" color={isDarkMode ? '#fff' : '#000'} />
       ) : (
         players.map(player => (
-          <View key={player.id} style={styles.listItem}>
-            <Text style={styles.itemText}>{player.name}</Text>
-            <Text style={styles.scoreText}>{formatTime(player.score)}</Text>
+          <View key={player.id} style={[styles.listItem, { borderTopColor: borderColor }]}>
+            <Text style={[styles.itemText, { color: textColor }]}>{player.name}</Text>
+            <Text style={[styles.scoreText, { color: secondaryTextColor }]}>{formatTime(player.score)}</Text>
           </View>
         ))
       )}
@@ -209,6 +287,10 @@ function App({ targetDate }: AppProps): React.JSX.Element {
   const isDarkMode = useColorScheme() === 'dark';
   const [selectedType, setSelectedType] = useState('mini');
   const puzzleDate = targetDate ? getDateFromString(targetDate) : new Date();
+  const borderColor = isDarkMode ? '#555555' : '#e0e0e0';
+  const textColor = isDarkMode ? '#ffffff' : '#000000';
+  const secondaryTextColor = isDarkMode ? '#cccccc' : '#666666';
+
 
   const backgroundStyle = {
     backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
@@ -227,11 +309,22 @@ function App({ targetDate }: AppProps): React.JSX.Element {
         paddingTop: insets.top + 10,
         backgroundColor: backgroundStyle.backgroundColor
       }}>
-        <Text style={{ fontSize: 24, textAlign: 'center' }}>Leaderboard</Text>
-        <View style={[styles.separator, { marginTop: 10 }]} />
+        <Text style={{ fontSize: 24, textAlign: 'left', color: textColor }}>   Leaderboards</Text>
+        <View style={[styles.separator, { marginTop: 10, backgroundColor: borderColor }]} />
       </View>
 
-      <View style={styles.separator} />
+      <View style={[styles.separator, { backgroundColor: borderColor }]} />
+
+      <View style={styles.dateContainer}>
+        <Text style={[styles.dateText, { color: secondaryTextColor }]}>
+          {formatDate(puzzleDate)}
+        </Text>
+      </View>
+
+
+      <View style={[styles.separator, { backgroundColor: borderColor }]} />
+
+
       <LeaderboardMenu
         selectedType={selectedType}
         onSelect={setSelectedType}
@@ -302,9 +395,25 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 20,
   },
-  menuContainer: {
+  menuOuterContainer: {
+    position: 'relative',
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
+  },
+  fadeView: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 30,
+    zIndex: 1,
+  },
+  leftFade: {
+    left: 0,
+    opacity: 0.9,
+  },
+  rightFade: {
+    right: 0,
+    opacity: 0.9,
   },
   menuScrollContent: {
     paddingHorizontal: 10,
@@ -319,22 +428,29 @@ const styles = StyleSheet.create({
     borderColor: '#e0e0e0',
   },
   menuItemSelected: {
-    backgroundColor: '#000000',
-    borderColor: '#000000',
+    backgroundColor: 'transparent',
   },
   menuText: {
     fontSize: 14,
-    color: '#000000',
     fontWeight: '500',
   },
   menuTextSelected: {
     color: '#ffffff',
   },
+  dateContainer: {
+    paddingTop: 15,
+    paddingBottom: 15,
+    alignItems: 'center',
+  },
+  dateText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
 });
 
 export default function AppWrapper() {
   // You can specify the date here
-  const targetDate = '2024-03-10'; // Format: YYYY-MM-DD
+  const targetDate = '2025-03-13'; // Format: YYYY-MM-DD
   
   return (
     <SafeAreaProvider>
